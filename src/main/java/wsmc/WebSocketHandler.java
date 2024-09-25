@@ -6,6 +6,8 @@ import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.PromiseCombiner;
 import io.netty.buffer.ByteBuf;
 
 public abstract class WebSocketHandler extends ChannelDuplexHandler {
@@ -51,7 +53,19 @@ public abstract class WebSocketHandler extends ChannelDuplexHandler {
 				dumpByteArray(byteBuf);
 			}
 
-			sendWsFrame(ctx, new BinaryWebSocketFrame(byteBuf), promise);
+			var promises = new PromiseCombiner(ctx.executor());
+			var currentIndex = byteBuf.readerIndex();
+			while (currentIndex < byteBuf.writerIndex()) {
+				var maxFrameSize = 1024 * 4;
+				var frameSize = Math.min(maxFrameSize, byteBuf.writerIndex() - currentIndex);
+				var frameData = byteBuf.retainedSlice(currentIndex, frameSize);
+				var framePromise = ctx.newPromise();
+				sendWsFrame(ctx, new BinaryWebSocketFrame(frameData), framePromise);
+				promises.add((Future<Void>) framePromise);
+				currentIndex += frameSize;
+			}
+			promises.finish(promise);
+			byteBuf.release();
 		} else {
 			// DefaultFullHttpResponse
 			WSMC.debug(this.outboundPrefix + " Passthrough: " + msg.getClass().getName());
